@@ -155,18 +155,12 @@ def export_image_encoder(model, output_path, opset_version=17):
     # Prepare output names based on whether high-res features are used
     if encoder.use_high_res_features:
         output_names = ["image_embeddings", "high_res_feat_0", "high_res_feat_1"]
-        dynamic_axes = {
-            "image": {0: "batch"},
-            "image_embeddings": {0: "batch"},
-            "high_res_feat_0": {0: "batch"},
-            "high_res_feat_1": {0: "batch"},
-        }
     else:
         output_names = ["image_embeddings"]
-        dynamic_axes = {
-            "image": {0: "batch"},
-            "image_embeddings": {0: "batch"},
-        }
+
+    # Note: We use fixed batch size (1) for better ONNX compatibility
+    # Dynamic axes can cause issues with certain operations in the model
+    dynamic_axes = None
 
     # Export to ONNX using legacy exporter (more stable)
     with torch.no_grad():
@@ -209,33 +203,21 @@ def export_mask_decoder(model, output_path, opset_version=17):
     print(f"  Point labels shape: {dummy_point_labels.shape}")
     print(f"  High-res features: {decoder.use_high_res_features}")
 
-    # Prepare inputs and dynamic axes based on whether high-res features are used
+    # Prepare inputs based on whether high-res features are used
     if decoder.use_high_res_features:
         dummy_high_res_0 = torch.randn(batch_size, 32, 256, 256)
         dummy_high_res_1 = torch.randn(batch_size, 64, 128, 128)
         dummy_inputs = (dummy_embeddings, dummy_point_coords, dummy_point_labels, dummy_high_res_0, dummy_high_res_1)
         input_names = ["image_embeddings", "point_coords", "point_labels", "high_res_feat_0", "high_res_feat_1"]
-        dynamic_axes = {
-            "image_embeddings": {0: "batch"},
-            "point_coords": {0: "batch", 1: "num_points"},
-            "point_labels": {0: "batch", 1: "num_points"},
-            "high_res_feat_0": {0: "batch"},
-            "high_res_feat_1": {0: "batch"},
-            "masks": {0: "batch"},
-            "iou_predictions": {0: "batch"},
-        }
         print(f"  High-res feat 0 shape: {dummy_high_res_0.shape}")
         print(f"  High-res feat 1 shape: {dummy_high_res_1.shape}")
     else:
         dummy_inputs = (dummy_embeddings, dummy_point_coords, dummy_point_labels)
         input_names = ["image_embeddings", "point_coords", "point_labels"]
-        dynamic_axes = {
-            "image_embeddings": {0: "batch"},
-            "point_coords": {0: "batch", 1: "num_points"},
-            "point_labels": {0: "batch", 1: "num_points"},
-            "masks": {0: "batch"},
-            "iou_predictions": {0: "batch"},
-        }
+
+    # Note: We use fixed shapes for better ONNX compatibility
+    # Dynamic axes can cause broadcasting issues with certain operations
+    dynamic_axes = None
 
     # Export to ONNX using legacy exporter (more stable)
     with torch.no_grad():
