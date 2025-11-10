@@ -279,7 +279,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/edgetam.yaml",
+        default="sam2/configs/edgetam.yaml",
         help="Path to EdgeTAM config file",
     )
     parser.add_argument(
@@ -352,11 +352,11 @@ def main():
     # Print next steps
     print("\nNext steps:")
     print("1. Verify ONNX models:")
-    print(f"   python export_to_onnx.py --checkpoint {args.checkpoint} --verify")
+    print(f"   python export_to_onnx.py --verify")
     print("\n2. Convert to TensorRT:")
     print(f"   python convert_to_tensorrt.py --onnx-dir {args.output_dir}")
     print("\n3. Run inference:")
-    print(f"   python deploy/simple_inference.py --onnx-dir {args.output_dir}")
+    print(f"   python deploy/onnx_inference.py --simulate --num-frames 10")
 
 
 if __name__ == "__main__":

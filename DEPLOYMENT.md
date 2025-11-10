@@ -55,7 +55,7 @@ ONNX formatı, farklı platformlarda (CPU, GPU, mobile) kolayca deploy edilebili
 # ONNX modelleri oluştur
 python export_to_onnx.py \
     --checkpoint checkpoints/edgetam.pt \
-    --config configs/edgetam.yaml \
+    --config sam2/configs/edgetam.yaml \
     --output-dir onnx_models \
     --verify
 ```
@@ -141,7 +141,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 # Model yükleme
 model = build_sam2(
-    config_file="configs/edgetam.yaml",
+    config_file="sam2/configs/edgetam.yaml",
     ckpt_path="checkpoints/edgetam.pt",
     device="cuda",
 )
