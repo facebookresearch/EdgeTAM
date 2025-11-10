@@ -168,8 +168,9 @@ def export_image_encoder(model, output_path, opset_version=17):
             "image_embeddings": {0: "batch"},
         }
 
-    # Export to ONNX
+    # Export to ONNX using legacy exporter (more stable)
     with torch.no_grad():
+        # Use legacy exporter for better compatibility
         torch.onnx.export(
             encoder,
             dummy_image,
@@ -181,6 +182,8 @@ def export_image_encoder(model, output_path, opset_version=17):
             output_names=output_names,
             dynamic_axes=dynamic_axes,
             verbose=False,
+            # Use legacy exporter
+            dynamo=False,
         )
 
     print(f"✓ Image Encoder exported successfully")
@@ -234,8 +237,9 @@ def export_mask_decoder(model, output_path, opset_version=17):
             "iou_predictions": {0: "batch"},
         }
 
-    # Export to ONNX
+    # Export to ONNX using legacy exporter (more stable)
     with torch.no_grad():
+        # Use legacy exporter for better compatibility
         torch.onnx.export(
             decoder,
             dummy_inputs,
@@ -247,6 +251,8 @@ def export_mask_decoder(model, output_path, opset_version=17):
             output_names=["masks", "iou_predictions"],
             dynamic_axes=dynamic_axes,
             verbose=False,
+            # Use legacy exporter
+            dynamo=False,
         )
 
     print(f"✓ Mask Decoder exported successfully")
