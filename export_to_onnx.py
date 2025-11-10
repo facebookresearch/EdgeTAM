@@ -29,6 +29,7 @@ class EdgeTAMImageEncoder(nn.Module):
         super().__init__()
         self.model = sam_model
         self.image_size = sam_model.image_size
+        self.use_high_res_features = sam_model.use_high_res_features_in_sam
 
     def forward(self, x):
         """
@@ -36,11 +37,16 @@ class EdgeTAMImageEncoder(nn.Module):
             x: Input image tensor [B, 3, H, W], normalized to [0, 1]
 
         Returns:
-            image_embeddings: Feature embeddings [B, C, H/16, W/16]
+            If use_high_res_features:
+                image_embeddings: [B, 256, 64, 64]
+                high_res_feat_0: [B, 32, 256, 256]
+                high_res_feat_1: [B, 64, 128, 128]
+            Else:
+                image_embeddings: [B, 256, 64, 64]
         """
         # Get backbone features
         backbone_out = self.model.forward_image(x)
-        _, vision_feats, _, _ = self.model._prepare_backbone_features(backbone_out)
+        _, vision_feats, _, feat_sizes = self.model._prepare_backbone_features(backbone_out)
 
         # Add no_mem_embed for initial frame
         if self.model.directly_add_no_mem_embed:
@@ -48,10 +54,22 @@ class EdgeTAMImageEncoder(nn.Module):
 
         # Get image embeddings (lowest resolution features)
         # Shape: [B, C, H, W] where H=W=64 for 1024x1024 input
-        feat_size = (64, 64)  # For image_size=1024
-        feats = vision_feats[-1].permute(1, 2, 0).view(x.size(0), -1, *feat_size)
+        B = x.size(0)
+        image_embeddings = vision_feats[-1].permute(1, 2, 0).view(B, -1, *feat_sizes[-1])
 
-        return feats
+        if self.use_high_res_features:
+            # Get high-resolution features
+            # feat_sizes: [(256, 256), (128, 128), (64, 64)]
+            high_res_feat_0 = vision_feats[0].permute(1, 2, 0).view(B, -1, *feat_sizes[0])
+            high_res_feat_1 = vision_feats[1].permute(1, 2, 0).view(B, -1, *feat_sizes[1])
+
+            # High-res features need to go through decoder's conv layers
+            high_res_feat_0 = self.model.sam_mask_decoder.conv_s0(high_res_feat_0)
+            high_res_feat_1 = self.model.sam_mask_decoder.conv_s1(high_res_feat_1)
+
+            return image_embeddings, high_res_feat_0, high_res_feat_1
+        else:
+            return image_embeddings
 
 
 class EdgeTAMMaskDecoder(nn.Module):
@@ -61,13 +79,16 @@ class EdgeTAMMaskDecoder(nn.Module):
         super().__init__()
         self.model = sam_model
         self.image_size = sam_model.image_size
+        self.use_high_res_features = sam_model.use_high_res_features_in_sam
 
-    def forward(self, image_embeddings, point_coords, point_labels):
+    def forward(self, image_embeddings, point_coords, point_labels, high_res_feat_0=None, high_res_feat_1=None):
         """
         Args:
             image_embeddings: [B, 256, 64, 64] from image encoder
             point_coords: [B, N, 2] point coordinates (x, y) in pixel space
             point_labels: [B, N] point labels (1=foreground, 0=background)
+            high_res_feat_0: [B, 32, 256, 256] (optional, only if use_high_res_features)
+            high_res_feat_1: [B, 64, 128, 128] (optional, only if use_high_res_features)
 
         Returns:
             masks: [B, 1, H, W] predicted masks at original resolution
@@ -90,6 +111,11 @@ class EdgeTAMMaskDecoder(nn.Module):
             masks=None,
         )
 
+        # Prepare high-res features if available
+        high_res_features = None
+        if self.use_high_res_features and high_res_feat_0 is not None and high_res_feat_1 is not None:
+            high_res_features = [high_res_feat_0, high_res_feat_1]
+
         # Predict masks
         low_res_masks, iou_predictions, _, _ = self.model.sam_mask_decoder(
             image_embeddings=image_embeddings,
@@ -98,7 +124,7 @@ class EdgeTAMMaskDecoder(nn.Module):
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=False,
             repeat_image=False,
-            high_res_features=None,
+            high_res_features=high_res_features,
         )
 
         # Upsample to original resolution
@@ -127,6 +153,23 @@ def export_image_encoder(model, output_path, opset_version=17):
 
     print(f"Exporting Image Encoder to {output_path}")
     print(f"  Input shape: {dummy_image.shape}")
+    print(f"  High-res features: {encoder.use_high_res_features}")
+
+    # Prepare output names based on whether high-res features are used
+    if encoder.use_high_res_features:
+        output_names = ["image_embeddings", "high_res_feat_0", "high_res_feat_1"]
+        dynamic_axes = {
+            "image": {0: "batch"},
+            "image_embeddings": {0: "batch"},
+            "high_res_feat_0": {0: "batch"},
+            "high_res_feat_1": {0: "batch"},
+        }
+    else:
+        output_names = ["image_embeddings"]
+        dynamic_axes = {
+            "image": {0: "batch"},
+            "image_embeddings": {0: "batch"},
+        }
 
     # Export to ONNX
     with torch.no_grad():
@@ -138,11 +181,8 @@ def export_image_encoder(model, output_path, opset_version=17):
             opset_version=opset_version,
             do_constant_folding=True,
             input_names=["image"],
-            output_names=["image_embeddings"],
-            dynamic_axes={
-                "image": {0: "batch"},
-                "image_embeddings": {0: "batch"},
-            },
+            output_names=output_names,
+            dynamic_axes=dynamic_axes,
             verbose=False,
         )
 
@@ -167,25 +207,48 @@ def export_mask_decoder(model, output_path, opset_version=17):
     print(f"  Embeddings shape: {dummy_embeddings.shape}")
     print(f"  Point coords shape: {dummy_point_coords.shape}")
     print(f"  Point labels shape: {dummy_point_labels.shape}")
+    print(f"  High-res features: {decoder.use_high_res_features}")
+
+    # Prepare inputs and dynamic axes based on whether high-res features are used
+    if decoder.use_high_res_features:
+        dummy_high_res_0 = torch.randn(batch_size, 32, 256, 256)
+        dummy_high_res_1 = torch.randn(batch_size, 64, 128, 128)
+        dummy_inputs = (dummy_embeddings, dummy_point_coords, dummy_point_labels, dummy_high_res_0, dummy_high_res_1)
+        input_names = ["image_embeddings", "point_coords", "point_labels", "high_res_feat_0", "high_res_feat_1"]
+        dynamic_axes = {
+            "image_embeddings": {0: "batch"},
+            "point_coords": {0: "batch", 1: "num_points"},
+            "point_labels": {0: "batch", 1: "num_points"},
+            "high_res_feat_0": {0: "batch"},
+            "high_res_feat_1": {0: "batch"},
+            "masks": {0: "batch"},
+            "iou_predictions": {0: "batch"},
+        }
+        print(f"  High-res feat 0 shape: {dummy_high_res_0.shape}")
+        print(f"  High-res feat 1 shape: {dummy_high_res_1.shape}")
+    else:
+        dummy_inputs = (dummy_embeddings, dummy_point_coords, dummy_point_labels)
+        input_names = ["image_embeddings", "point_coords", "point_labels"]
+        dynamic_axes = {
+            "image_embeddings": {0: "batch"},
+            "point_coords": {0: "batch", 1: "num_points"},
+            "point_labels": {0: "batch", 1: "num_points"},
+            "masks": {0: "batch"},
+            "iou_predictions": {0: "batch"},
+        }
 
     # Export to ONNX
     with torch.no_grad():
         torch.onnx.export(
             decoder,
-            (dummy_embeddings, dummy_point_coords, dummy_point_labels),
+            dummy_inputs,
             output_path,
             export_params=True,
             opset_version=opset_version,
             do_constant_folding=True,
-            input_names=["image_embeddings", "point_coords", "point_labels"],
+            input_names=input_names,
             output_names=["masks", "iou_predictions"],
-            dynamic_axes={
-                "image_embeddings": {0: "batch"},
-                "point_coords": {0: "batch", 1: "num_points"},
-                "point_labels": {0: "batch", 1: "num_points"},
-                "masks": {0: "batch"},
-                "iou_predictions": {0: "batch"},
-            },
+            dynamic_axes=dynamic_axes,
             verbose=False,
         )
 
@@ -243,8 +306,8 @@ def main():
     parser.add_argument(
         "--opset-version",
         type=int,
-        default=17,
-        help="ONNX opset version",
+        default=18,
+        help="ONNX opset version (18 recommended for PyTorch 2.3+)",
     )
     parser.add_argument(
         "--verify",

@@ -59,10 +59,16 @@ class EdgeTAMONNXInference:
 
         # Get input/output names
         self.encoder_input_name = self.encoder_session.get_inputs()[0].name
-        self.encoder_output_name = self.encoder_session.get_outputs()[0].name
+        self.encoder_output_names = [out.name for out in self.encoder_session.get_outputs()]
 
         self.decoder_input_names = [inp.name for inp in self.decoder_session.get_inputs()]
         self.decoder_output_names = [out.name for out in self.decoder_session.get_outputs()]
+
+        # Check if model uses high-res features
+        self.use_high_res_features = len(self.encoder_output_names) == 3
+        print(f"  High-res features: {self.use_high_res_features}")
+        print(f"  Encoder outputs: {self.encoder_output_names}")
+        print(f"  Decoder inputs: {self.decoder_input_names}")
 
     def preprocess_image(self, image):
         """
@@ -103,21 +109,28 @@ class EdgeTAMONNXInference:
             image: Preprocessed image [1, 3, 1024, 1024]
 
         Returns:
-            Image embeddings [1, 256, 64, 64]
+            If use_high_res_features:
+                Tuple of (embeddings, high_res_feat_0, high_res_feat_1)
+            Else:
+                embeddings [1, 256, 64, 64]
         """
-        embeddings = self.encoder_session.run(
-            [self.encoder_output_name],
+        outputs = self.encoder_session.run(
+            self.encoder_output_names,
             {self.encoder_input_name: image}
-        )[0]
+        )
 
-        return embeddings
+        if self.use_high_res_features:
+            # outputs = [embeddings, high_res_feat_0, high_res_feat_1]
+            return outputs
+        else:
+            return outputs[0]
 
     def predict_mask(self, embeddings, point_coords, point_labels):
         """
         Predict segmentation mask from embeddings and prompts
 
         Args:
-            embeddings: Image embeddings [1, 256, 64, 64]
+            embeddings: Image embeddings [1, 256, 64, 64] or tuple (embeddings, high_res_0, high_res_1)
             point_coords: Point coordinates [[x1, y1], [x2, y2], ...] in image space
             point_labels: Point labels [1, 1, ...] (1=foreground, 0=background)
 
@@ -130,14 +143,26 @@ class EdgeTAMONNXInference:
         point_coords = np.array(point_coords, dtype=np.float32).reshape(1, -1, 2)
         point_labels = np.array(point_labels, dtype=np.int32).reshape(1, -1)
 
+        # Prepare decoder inputs
+        decoder_inputs = {}
+
+        if self.use_high_res_features:
+            # embeddings is a tuple: (image_embeddings, high_res_0, high_res_1)
+            decoder_inputs[self.decoder_input_names[0]] = embeddings[0]  # image_embeddings
+            decoder_inputs[self.decoder_input_names[1]] = point_coords
+            decoder_inputs[self.decoder_input_names[2]] = point_labels
+            decoder_inputs[self.decoder_input_names[3]] = embeddings[1]  # high_res_feat_0
+            decoder_inputs[self.decoder_input_names[4]] = embeddings[2]  # high_res_feat_1
+        else:
+            # embeddings is just the image embeddings
+            decoder_inputs[self.decoder_input_names[0]] = embeddings
+            decoder_inputs[self.decoder_input_names[1]] = point_coords
+            decoder_inputs[self.decoder_input_names[2]] = point_labels
+
         # Run inference
         outputs = self.decoder_session.run(
             self.decoder_output_names,
-            {
-                self.decoder_input_names[0]: embeddings,
-                self.decoder_input_names[1]: point_coords,
-                self.decoder_input_names[2]: point_labels,
-            }
+            decoder_inputs
         )
 
         masks, iou_predictions = outputs[0], outputs[1]

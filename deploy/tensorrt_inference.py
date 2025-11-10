@@ -63,6 +63,10 @@ class EdgeTAMTensorRTInference:
 
         print("✓ TensorRT engines loaded successfully")
 
+        # Check if model uses high-res features
+        self.use_high_res_features = self.encoder_engine.num_bindings > 2  # > 2 means we have high-res outputs
+        print(f"  High-res features: {self.use_high_res_features}")
+
         # Allocate buffers
         self._allocate_buffers()
 
@@ -72,12 +76,21 @@ class EdgeTAMTensorRTInference:
         self.encoder_input = self.cuda.mem_alloc(1 * 3 * 1024 * 1024 * np.dtype(np.float32).itemsize)
         self.encoder_output = self.cuda.mem_alloc(1 * 256 * 64 * 64 * np.dtype(np.float32).itemsize)
 
+        if self.use_high_res_features:
+            self.encoder_high_res_0 = self.cuda.mem_alloc(1 * 32 * 256 * 256 * np.dtype(np.float32).itemsize)
+            self.encoder_high_res_1 = self.cuda.mem_alloc(1 * 64 * 128 * 128 * np.dtype(np.float32).itemsize)
+
         # Decoder buffers (we'll allocate dynamically based on num_points)
         # For now, allocate for max 10 points
         max_points = 10
         self.decoder_embeddings = self.cuda.mem_alloc(1 * 256 * 64 * 64 * np.dtype(np.float32).itemsize)
         self.decoder_coords = self.cuda.mem_alloc(1 * max_points * 2 * np.dtype(np.float32).itemsize)
         self.decoder_labels = self.cuda.mem_alloc(1 * max_points * np.dtype(np.int32).itemsize)
+
+        if self.use_high_res_features:
+            self.decoder_high_res_0 = self.cuda.mem_alloc(1 * 32 * 256 * 256 * np.dtype(np.float32).itemsize)
+            self.decoder_high_res_1 = self.cuda.mem_alloc(1 * 64 * 128 * 128 * np.dtype(np.float32).itemsize)
+
         self.decoder_masks = self.cuda.mem_alloc(1 * 1 * 1024 * 1024 * np.dtype(np.float32).itemsize)
         self.decoder_ious = self.cuda.mem_alloc(1 * 1 * np.dtype(np.float32).itemsize)
 
@@ -122,29 +135,51 @@ class EdgeTAMTensorRTInference:
             image: Preprocessed image [1, 3, 1024, 1024]
 
         Returns:
-            Image embeddings [1, 256, 64, 64]
+            If use_high_res_features:
+                Tuple of (embeddings, high_res_feat_0, high_res_feat_1)
+            Else:
+                Image embeddings [1, 256, 64, 64]
         """
         # Copy input to GPU
         self.cuda.memcpy_htod(self.encoder_input, image)
 
         # Run inference
-        self.encoder_context.execute_v2([
-            int(self.encoder_input),
-            int(self.encoder_output)
-        ])
+        if self.use_high_res_features:
+            self.encoder_context.execute_v2([
+                int(self.encoder_input),
+                int(self.encoder_output),
+                int(self.encoder_high_res_0),
+                int(self.encoder_high_res_1)
+            ])
 
-        # Copy output from GPU
-        embeddings = np.empty((1, 256, 64, 64), dtype=np.float32)
-        self.cuda.memcpy_dtoh(embeddings, self.encoder_output)
+            # Copy outputs from GPU
+            embeddings = np.empty((1, 256, 64, 64), dtype=np.float32)
+            high_res_0 = np.empty((1, 32, 256, 256), dtype=np.float32)
+            high_res_1 = np.empty((1, 64, 128, 128), dtype=np.float32)
 
-        return embeddings
+            self.cuda.memcpy_dtoh(embeddings, self.encoder_output)
+            self.cuda.memcpy_dtoh(high_res_0, self.encoder_high_res_0)
+            self.cuda.memcpy_dtoh(high_res_1, self.encoder_high_res_1)
+
+            return (embeddings, high_res_0, high_res_1)
+        else:
+            self.encoder_context.execute_v2([
+                int(self.encoder_input),
+                int(self.encoder_output)
+            ])
+
+            # Copy output from GPU
+            embeddings = np.empty((1, 256, 64, 64), dtype=np.float32)
+            self.cuda.memcpy_dtoh(embeddings, self.encoder_output)
+
+            return embeddings
 
     def predict_mask(self, embeddings, point_coords, point_labels):
         """
         Predict segmentation mask using TensorRT
 
         Args:
-            embeddings: Image embeddings [1, 256, 64, 64]
+            embeddings: Image embeddings [1, 256, 64, 64] or tuple (embeddings, high_res_0, high_res_1)
             point_coords: Point coordinates [[x1, y1], ...] in image space
             point_labels: Point labels [1, 1, ...] (1=foreground, 0=background)
 
@@ -157,18 +192,36 @@ class EdgeTAMTensorRTInference:
         point_labels = np.array(point_labels, dtype=np.int32).reshape(1, -1)
 
         # Copy inputs to GPU
-        self.cuda.memcpy_htod(self.decoder_embeddings, embeddings)
+        if self.use_high_res_features:
+            # embeddings is a tuple
+            self.cuda.memcpy_htod(self.decoder_embeddings, embeddings[0])
+            self.cuda.memcpy_htod(self.decoder_high_res_0, embeddings[1])
+            self.cuda.memcpy_htod(self.decoder_high_res_1, embeddings[2])
+        else:
+            self.cuda.memcpy_htod(self.decoder_embeddings, embeddings)
+
         self.cuda.memcpy_htod(self.decoder_coords, point_coords)
         self.cuda.memcpy_htod(self.decoder_labels, point_labels)
 
         # Run inference
-        self.decoder_context.execute_v2([
-            int(self.decoder_embeddings),
-            int(self.decoder_coords),
-            int(self.decoder_labels),
-            int(self.decoder_masks),
-            int(self.decoder_ious)
-        ])
+        if self.use_high_res_features:
+            self.decoder_context.execute_v2([
+                int(self.decoder_embeddings),
+                int(self.decoder_coords),
+                int(self.decoder_labels),
+                int(self.decoder_high_res_0),
+                int(self.decoder_high_res_1),
+                int(self.decoder_masks),
+                int(self.decoder_ious)
+            ])
+        else:
+            self.decoder_context.execute_v2([
+                int(self.decoder_embeddings),
+                int(self.decoder_coords),
+                int(self.decoder_labels),
+                int(self.decoder_masks),
+                int(self.decoder_ious)
+            ])
 
         # Copy outputs from GPU
         masks = np.empty((1, 1, 1024, 1024), dtype=np.float32)
