@@ -66,9 +66,12 @@ class EdgeTAMONNXInference:
 
         # Check if model uses high-res features
         self.use_high_res_features = len(self.encoder_output_names) == 3
+
+        print(f"\n📊 Model Configuration:")
         print(f"  High-res features: {self.use_high_res_features}")
-        print(f"  Encoder outputs: {self.encoder_output_names}")
-        print(f"  Decoder inputs: {self.decoder_input_names}")
+        print(f"  Encoder outputs ({len(self.encoder_output_names)}): {self.encoder_output_names}")
+        print(f"  Decoder inputs ({len(self.decoder_input_names)}): {self.decoder_input_names}")
+        print()
 
     def preprocess_image(self, image):
         """
