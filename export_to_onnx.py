@@ -60,12 +60,9 @@ class EdgeTAMImageEncoder(nn.Module):
         if self.use_high_res_features:
             # Get high-resolution features
             # feat_sizes: [(256, 256), (128, 128), (64, 64)]
+            # Note: forward_image already applies conv_s0 and conv_s1 to backbone_fpn[0] and backbone_fpn[1]
             high_res_feat_0 = vision_feats[0].permute(1, 2, 0).view(B, -1, *feat_sizes[0])
             high_res_feat_1 = vision_feats[1].permute(1, 2, 0).view(B, -1, *feat_sizes[1])
-
-            # High-res features need to go through decoder's conv layers
-            high_res_feat_0 = self.model.sam_mask_decoder.conv_s0(high_res_feat_0)
-            high_res_feat_1 = self.model.sam_mask_decoder.conv_s1(high_res_feat_1)
 
             return image_embeddings, high_res_feat_0, high_res_feat_1
         else:
