@@ -1,0 +1,33 @@
+# EdgeTAM Deployment Requirements
+# Install with: pip install -r requirements-deploy.txt
+
+# Core dependencies
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# ONNX Export & Inference (Required for ONNX deployment)
+onnx>=1.15.0
+onnxruntime>=1.16.0  # CPU version
+
+# For GPU inference with ONNX (Optional, comment out if CPU only)
+# onnxruntime-gpu>=1.16.0
+
+# TensorRT (Optional, for NVIDIA GPU deployment)
+# Note: TensorRT requires manual installation from NVIDIA
+# Download from: https://developer.nvidia.com/tensorrt
+# Or use NVIDIA NGC container: nvcr.io/nvidia/tensorrt:xx.xx-py3
+# tensorrt>=8.6.0
+# pycuda>=2022.1
+
+# PyTorch inference (Optional, for reference implementation)
+torch>=2.3.1
+torchvision>=0.18.1
+
+# EdgeTAM package dependencies (if using PyTorch)
+hydra-core>=1.3.0
+omegaconf>=2.3.0
+timm>=0.9.0
+
+# Utilities
+pillow>=10.0.0
+tqdm>=4.65.0
