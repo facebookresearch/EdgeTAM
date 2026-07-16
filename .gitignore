@@ -8,4 +8,7 @@ build/*
 _C.*
 outputs/*
 coreml_models/*
+coreml/video_tracking/models/
+coreml/video_tracking/results/
+coreml/video_tracking/validation.json
 checkpoints/*.pt
