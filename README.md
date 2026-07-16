@@ -145,8 +145,13 @@ python ./coreml/export_to_coreml.py \
 
 This creates three optimized CoreML models:
 - **Image Encoder**: Processes input images to feature embeddings (~9.6MB)
-- **Prompt Encoder**: Handles user prompts (points, boxes, masks) (~2MB) 
+- **Prompt Encoder**: Handles user prompts (points, boxes, masks) (~2MB)
 - **Mask Decoder**: Generates segmentation masks from features (~8MB)
+
+For temporal video tracking, EdgeTAM can also export four Core ML models that
+preserve the video predictor's memory pipeline. See the
+[Core ML video tracking guide](./coreml/video_tracking/README.md) for export,
+inference, and validation instructions.
 
 
 ## Performance
