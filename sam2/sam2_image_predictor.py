@@ -58,11 +58,12 @@ class SAM2ImagePredictor:
         # Predictor config
         self.mask_threshold = mask_threshold
 
-        # Spatial dim for backbone feature maps
+        # Spatial dim for backbone feature maps (strides 4, 8 and 16)
+        image_size = self.model.image_size
         self._bb_feat_sizes = [
-            (256, 256),
-            (128, 128),
-            (64, 64),
+            (image_size // 4, image_size // 4),
+            (image_size // 8, image_size // 8),
+            (image_size // 16, image_size // 16),
         ]
 
     @classmethod

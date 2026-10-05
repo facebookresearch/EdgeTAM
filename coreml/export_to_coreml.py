@@ -70,10 +70,12 @@ class EdgeTAMImageEncoder(torch.nn.Module):
                 )
                 vision_features = vision_features_flat.permute(1, 2, 0).view(B, C, H, W)
         else:
-            bs = image.shape[0]
-            vision_features = torch.zeros(bs, 256, 64, 64, device=image.device)
-            high_res_feat_0 = torch.zeros(bs, 32, 256, 256, device=image.device)
-            high_res_feat_1 = torch.zeros(bs, 64, 128, 128, device=image.device)
+            bs, _, H, W = image.shape
+            vision_features = torch.zeros(
+                bs, 256, H // 16, W // 16, device=image.device
+            )
+            high_res_feat_0 = torch.zeros(bs, 32, H // 4, W // 4, device=image.device)
+            high_res_feat_1 = torch.zeros(bs, 64, H // 8, W // 8, device=image.device)
 
         return vision_features, high_res_feat_0, high_res_feat_1
 
@@ -152,14 +154,15 @@ def export_image_encoder(model, output_path: str):
     encoder_wrapper = EdgeTAMImageEncoder(model)
     encoder_wrapper.eval()
 
-    example_input = torch.randn(1, 3, 1024, 1024)
+    s = model.image_size
+    example_input = torch.randn(1, 3, s, s)
 
     with torch.no_grad():
         traced_model = torch.jit.trace(encoder_wrapper, example_input)
 
     image_input = ct.ImageType(
         name="image",
-        shape=(1, 3, 1024, 1024),
+        shape=(1, 3, s, s),
         scale=1 / 255.0,
         bias=[0, 0, 0],
         color_layout=ct.colorlayout.RGB,
@@ -192,12 +195,13 @@ def export_prompt_encoder(model, output_path: str):
     encoder_wrapper = EdgeTAMPromptEncoder(model)
     encoder_wrapper.eval()
 
+    s = model.image_size
     point_coords = torch.zeros(1, 4, 2)
-    point_coords[0, 0] = torch.tensor([512.0, 512.0])
+    point_coords[0, 0] = torch.tensor([s / 2, s / 2])
     point_labels = torch.full((1, 4), -1, dtype=torch.float32)
     point_labels[0, 0] = 1.0
     boxes = torch.zeros(1, 4)
-    mask_input = torch.zeros(1, 1, 256, 256)
+    mask_input = torch.zeros(1, 1, s // 4, s // 4)
 
     with torch.no_grad():
         traced_model = torch.jit.trace(
@@ -210,7 +214,7 @@ def export_prompt_encoder(model, output_path: str):
             ct.TensorType(name="point_coords", shape=(1, 4, 2)),
             ct.TensorType(name="point_labels", shape=(1, 4)),
             ct.TensorType(name="boxes", shape=(1, 4)),
-            ct.TensorType(name="mask_input", shape=(1, 1, 256, 256)),
+            ct.TensorType(name="mask_input", shape=(1, 1, s // 4, s // 4)),
         ],
         outputs=[
             ct.TensorType(name="sparse_embeddings"),
@@ -235,12 +239,14 @@ def export_mask_decoder(model, output_path: str):
     decoder_wrapper = EdgeTAMMaskDecoder(model)
     decoder_wrapper.eval()
 
-    image_embeddings = torch.randn(1, 256, 64, 64)
-    image_pe = torch.randn(1, 256, 64, 64)
+    s = model.image_size
+    e = s // 16  # stride-16 image embedding size
+    image_embeddings = torch.randn(1, 256, e, e)
+    image_pe = torch.randn(1, 256, e, e)
     sparse_prompt_embeddings = torch.randn(1, 2, 256)
-    dense_prompt_embeddings = torch.randn(1, 256, 64, 64)
-    high_res_feat_0 = torch.randn(1, 32, 256, 256)
-    high_res_feat_1 = torch.randn(1, 64, 128, 128)
+    dense_prompt_embeddings = torch.randn(1, 256, e, e)
+    high_res_feat_0 = torch.randn(1, 32, s // 4, s // 4)
+    high_res_feat_1 = torch.randn(1, 64, s // 8, s // 8)
     multimask_output = torch.tensor([True])
 
     with torch.no_grad():
@@ -260,14 +266,14 @@ def export_mask_decoder(model, output_path: str):
     mlmodel = ct.convert(
         traced_model,
         inputs=[
-            ct.TensorType(name="image_embeddings", shape=(1, 256, 64, 64)),
-            ct.TensorType(name="image_pe", shape=(1, 256, 64, 64)),
+            ct.TensorType(name="image_embeddings", shape=(1, 256, e, e)),
+            ct.TensorType(name="image_pe", shape=(1, 256, e, e)),
             ct.TensorType(
                 name="sparse_prompt_embeddings", shape=(1, ct.RangeDim(1, 10), 256)
             ),
-            ct.TensorType(name="dense_prompt_embeddings", shape=(1, 256, 64, 64)),
-            ct.TensorType(name="high_res_feat_0", shape=(1, 32, 256, 256)),
-            ct.TensorType(name="high_res_feat_1", shape=(1, 64, 128, 128)),
+            ct.TensorType(name="dense_prompt_embeddings", shape=(1, 256, e, e)),
+            ct.TensorType(name="high_res_feat_0", shape=(1, 32, s // 4, s // 4)),
+            ct.TensorType(name="high_res_feat_1", shape=(1, 64, s // 8, s // 8)),
             ct.TensorType(name="multimask_output", shape=(1,)),
         ],
         outputs=[ct.TensorType(name="masks"), ct.TensorType(name="iou_pred")],
@@ -342,6 +348,8 @@ def main():
         metadata = {
             "model_name": "EdgeTAM",
             "version": "1.0",
+            # frames and prompt coordinates must be scaled to this size
+            "image_size": model.image_size,
             "components": {
                 "image_encoder": "edgetam_image_encoder.mlpackage",
                 "prompt_encoder": "edgetam_prompt_encoder.mlpackage",

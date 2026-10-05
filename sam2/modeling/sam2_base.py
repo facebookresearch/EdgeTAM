@@ -185,6 +185,7 @@ class SAM2Base(torch.nn.Module):
 
         # Perceiver
         self.spatial_perceiver = spatial_perceiver
+        self._check_image_size()
 
         # Model compilation
         if compile_image_encoder:
@@ -202,6 +203,20 @@ class SAM2Base(torch.nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
+
+    def _check_image_size(self):
+        """Fail early on input sizes the spatial perceiver cannot window."""
+        perceiver = self.spatial_perceiver
+        if perceiver is None or getattr(perceiver, "num_latents_2d", -1) <= 0:
+            return
+        num_window = int(round(perceiver.num_latents_2d**0.5))
+        grid = self.image_size // self.backbone_stride
+        if self.image_size % self.backbone_stride != 0 or grid % num_window != 0:
+            multiple = self.backbone_stride * num_window
+            raise ValueError(
+                f"image_size must be a multiple of {multiple} for the spatial perceiver "
+                f"(e.g. 512, 768 or 1024), got {self.image_size}"
+            )
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError(

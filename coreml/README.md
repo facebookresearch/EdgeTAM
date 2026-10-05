@@ -15,6 +15,8 @@ This creates three CoreML models in `./coreml_models/`:
 - `edgetam_prompt_encoder.mlpackage` (2.0MB)
 - `edgetam_mask_decoder.mlpackage` (9.8MB)
 
+To export at a lower input resolution, pass a smaller config such as `--sam2_cfg sam2/configs/edgetam_512.yaml`; the size is saved as `image_size` in `model_info.json`. `inference_example.py` and `benchmark_coreml.py` still assume a 1024 export.
+
 ## Usage Example
 
 ```python

@@ -131,6 +131,25 @@ with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
 
 Please refer to the examples in [video_predictor_example.ipynb](./notebooks/video_predictor_example.ipynb) for details on how to add click or box prompts, make refinements, and track multiple objects in videos.
 
+### Lower input resolutions
+
+Every frame is resized to 1024x1024 by default, so a 512x512 video is tracked at 4x its pixel count. The released checkpoint also runs at 768x768 or 512x512 input without retraining, which skips that extra work:
+
+| Config | Input size | GFLOPs per frame | CPU ms per frame | DAVIS 2017 val J&F |
+|---|---|---|---|---|
+| `configs/edgetam.yaml` | 1024 | 144 | 1132 | 86.4 |
+| `configs/edgetam_768.yaml` | 768 | 73 | 599 | 84.8 |
+| `configs/edgetam_512.yaml` | 512 | 30 | 243 | 80.1 |
+
+GFLOPs and time are per tracked frame of a 512x512 video with one object, on an i7-12800HX limited to 2 threads. On an RTX A4500 laptop GPU the 512 config is 1.5-1.9x faster, since much of a frame there is fixed overhead. J&F is measured with `tools/vos_inference.py` and the official DAVIS evaluator (the paper reports 87.7 at 1024); small and thin objects lose the most at 512. Input sizes must be multiples of 256.
+
+Use these configs in place of `configs/edgetam.yaml` in the examples above. To check the trade-off on your own video:
+
+```bash
+python tools/compare_resolutions.py --video_dir <folder_of_jpeg_frames> \
+  --box <x0> <y0> <x1> <y1> --sizes 1024 768 512
+```
+
 ### CoreML export for iOS/macOS deployment
 
 EdgeTAM can be exported to CoreML format for deployment on iOS and macOS devices, enabling on-device inference with hardware acceleration.
@@ -147,6 +166,8 @@ This creates three optimized CoreML models:
 - **Image Encoder**: Processes input images to feature embeddings (~9.6MB)
 - **Prompt Encoder**: Handles user prompts (points, boxes, masks) (~2MB) 
 - **Mask Decoder**: Generates segmentation masks from features (~8MB)
+
+To export at a lower input resolution, pass a smaller config such as `--sam2_cfg ./sam2/configs/edgetam_512.yaml`. The size is saved as `image_size` in `model_info.json`.
 
 
 ## Performance

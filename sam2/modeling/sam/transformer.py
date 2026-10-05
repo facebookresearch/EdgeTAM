@@ -290,6 +290,16 @@ class Attention(nn.Module):
         return out
 
 
+def _square_side(n_tokens: int) -> int:
+    """Side of the square token grid that the RoPE tables are built for."""
+    side = int(round(math.sqrt(n_tokens)))
+    if side * side != n_tokens:
+        raise ValueError(
+            f"RoPE attention needs a square feature map, got {n_tokens} tokens"
+        )
+    return side
+
+
 class RoPEAttention(Attention):
     """Attention with rotary position encoding."""
 
@@ -326,10 +336,11 @@ class RoPEAttention(Attention):
         v = self._separate_heads(v, self.num_heads)
 
         # Apply rotary position encoding
-        w = h = math.sqrt(q.shape[-2])
         self.freqs_cis = self.freqs_cis.to(q.device)
         if self.freqs_cis.shape[0] != q.shape[-2]:
-            self.freqs_cis = self.compute_cis(end_x=w, end_y=h).to(q.device)
+            # rebuild the table when the feature map size changes (other image_size)
+            side = _square_side(q.shape[-2])
+            self.freqs_cis = self.compute_cis(end_x=side, end_y=side).to(q.device)
         if q.shape[-2] != k.shape[-2]:
             assert self.rope_k_repeat
 
@@ -404,6 +415,10 @@ class RoPEAttentionv2(Attention):
         v = self._separate_heads(v, self.num_heads)
 
         # Apply rotary position encoding
+        if self.freqs_cis_q.shape[0] != q.shape[-2]:
+            # q_sizes does not match the feature map (other image_size), so rebuild
+            side = _square_side(q.shape[-2])
+            self.freqs_cis_q = self.compute_cis(end_x=side, end_y=side)
         self.freqs_cis_q = self.freqs_cis_q.to(q.device)
         self.freqs_cis_k = self.freqs_cis_k.to(q.device)
         q = apply_rotary_enc_v2(q, self.freqs_cis_q, repeat_freqs=1)
