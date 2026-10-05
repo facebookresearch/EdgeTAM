@@ -295,7 +295,9 @@ class PerceiverResampler(nn.Module):
     def forward_2d(self, x):
         B, C, H, W = x.shape
 
-        latents_2d = self.latents_2d.unsqueeze(0).expand(B, -1, -1).view(-1, 1, C)
+        # reshape is used instead of view: view fails on the expanded tensor
+        # when B > 1 (2+ objects)
+        latents_2d = self.latents_2d.unsqueeze(0).expand(B, -1, -1).reshape(-1, 1, C)
 
         num_window = int(math.sqrt(self.num_latents_2d))
         window_size = H // num_window
